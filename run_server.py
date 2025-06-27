@@ -1,5 +1,6 @@
 # run_server.py
 import socket
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 from http_server import HttpServer
 
@@ -14,6 +15,7 @@ def handle_connection(connection):
         if data:
             response = server_logic.proses(data)
             connection.sendall(response)
+            print("[SERVER]", connection.getsockname(), "menerima koneksi dari", connection.getpeername())
     except socket.timeout:
         print("Connection timed out.")
     except Exception as e:
@@ -22,7 +24,10 @@ def handle_connection(connection):
         connection.close()
 
 def run_server():
-    HOST, PORT = 'localhost', 8000
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', type=int, default=8000)
+    args = parser.parse_args()
+    HOST, PORT = 'localhost', args.port
     
     # Menggunakan ThreadPoolExecutor untuk menangani banyak klien secara bersamaan
     executor = ThreadPoolExecutor(max_workers=20)

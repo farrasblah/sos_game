@@ -31,6 +31,8 @@ Connection: close\r
         try:
             baris_pertama = data.split("\r\n")[0]
             method, path, _ = baris_pertama.split(" ")
+            print("[SERVER] Menerima request:")
+            print(baris_pertama)
         except ValueError:
             return self.response(400, "Bad Request", "Invalid HTTP request")
         
@@ -40,6 +42,7 @@ Connection: close\r
 
     def route(self, path):
         """Mengarahkan request ke fungsi yang sesuai."""
+        print(f"[SERVER] Menangani request: {path}")
         path_only, params = self.parse_path(path)
         room_id = params.get("room_id")
         player_name = params.get("player_name")
@@ -62,12 +65,15 @@ Connection: close\r
                 return self.response(400, "Bad Request", "Room ID dan Nama Player harus diisi.")
             if room_id not in self.games:
                 return self.response(404, "Not Found", f"Room '{room_id}' tidak ditemukan.")
-            
+
             game = self.games[room_id]
             if len(game.players) >= 2:
                 return self.response(400, "Bad Request", "Room sudah penuh.")
-            
+
             pid = game.add_player(player_name)
+            if pid is None:
+                return self.response(400, "Bad Request", "Nama pemain sudah digunakan.")
+
             return self.response(200, "OK", f"Berhasil Bergabung\nplayer_id:{pid}")
 
         if room_id not in self.games:

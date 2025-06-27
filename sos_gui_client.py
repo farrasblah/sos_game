@@ -6,7 +6,7 @@ import time
 
 # --- Konfigurasi Awal ---
 pygame.init()
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8080"
 WIDTH, HEIGHT = 500, 700
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("SOS Game")
@@ -105,7 +105,7 @@ def fetch_game_state():
     if not app.room_id or time.time() - app.last_fetch_time < 1:
         return
     try:
-        app.last_fetch_time = time.time()
+        app.last_fetch_time = time.time() # type: ignore
         r = requests.get(f"{BASE_URL}/status?room_id={app.room_id}", timeout=2)
         if r.status_code == 200:
             app.game_state = parse_status(r.text)
