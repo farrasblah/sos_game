@@ -1,105 +1,95 @@
 # http_server.py
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
-import uuid
 from sos_game import SOSGame
 
 class HttpServer:
     def __init__(self):
-        self.games = {}          # Menyimpan game ID → game object
-        self.player_letters = {} # Menyimpan game ID → {player_id: letter}
+        self.games = {} 
 
     def response(self, kode=200, message='OK', body='', headers=None):
-        if headers is None:
-            headers = {}
-        if isinstance(body, str):
-            body = body.encode()
-        headers_text = f"""HTTP/1.0 {kode} {message}\r
+        """Membuat respons HTTP standar."""
+        if headers is None: headers = {}
+        body_bytes = body.encode('utf-8')
+        headers_text = f"""HTTP/1.1 {kode} {message}\r
 Date: {datetime.now().ctime()}\r
-Content-Length: {len(body)}\r
-Content-Type: text/plain\r
+Content-Length: {len(body_bytes)}\r
+Content-Type: text/plain; charset=utf-8\r
+Connection: close\r
 \r
-""".encode()
-        return headers_text + body
+""".encode('utf-8')
+        return headers_text + body_bytes
 
     def parse_path(self, path):
+        """Mengekstrak path dan parameter dari request."""
         parsed = urlparse(path)
         params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         return parsed.path, params
 
     def proses(self, data):
-        baris_pertama = data.split("\r\n")[0]
-        method, path, _ = baris_pertama.split(" ")
+        """Memproses seluruh request dari klien."""
+        try:
+            baris_pertama = data.split("\r\n")[0]
+            method, path, _ = baris_pertama.split(" ")
+        except ValueError:
+            return self.response(400, "Bad Request", "Invalid HTTP request")
+        
         if method != "GET":
             return self.response(405, "Method Not Allowed", "Gunakan GET")
         return self.route(path)
 
     def route(self, path):
+        """Mengarahkan request ke fungsi yang sesuai."""
         path_only, params = self.parse_path(path)
+        room_id = params.get("room_id")
+        player_name = params.get("player_name")
 
-        # BUAT GAME BARU
-        if path_only == "/join":
-            game_id = str(uuid.uuid4())
-            game = SOSGame()
-            pid = game.add_player()
-            if pid is None:
-                return self.response(400, "Bad Request", "Gagal tambah player")
-            self.games[game_id] = game
-            self.player_letters[game_id] = {pid: "S"}
-            return self.response(200, "OK", f"Game ID: {game_id}\nPlayer ID: {pid}\nLetter: S")
+        # Membuat room baru
+        if path_only == "/create_room":
+            if not room_id or not player_name:
+                return self.response(400, "Bad Request", "Room ID dan Nama Player harus diisi.")
+            if room_id in self.games:
+                return self.response(400, "Bad Request", f"Room '{room_id}' sudah ada.")
+            
+            game = SOSGame(board_size=3)
+            pid = game.add_player(player_name)
+            self.games[room_id] = game
+            return self.response(200, "OK", f"Room Dibuat\nplayer_id:{pid}")
 
-        # JOIN KE GAME YANG SUDAH ADA
-        if path_only == "/join_game":
-            gid = params.get("game_id")
-            if gid in self.games:
-                game = self.games[gid]
-                pid = game.add_player()
-                if pid:
-                    huruf = "O"
-                    self.player_letters[gid][pid] = huruf
-                    return self.response(200, "OK", f"Game ID: {gid}\nPlayer ID: {pid}\nLetter: {huruf}")
-                else:
-                    return self.response(400, "Bad Request", "Game full")
-            return self.response(404, "Not Found", "Game not found")
+        # Bergabung ke room yang ada
+        if path_only == "/join_room":
+            if not room_id or not player_name:
+                return self.response(400, "Bad Request", "Room ID dan Nama Player harus diisi.")
+            if room_id not in self.games:
+                return self.response(404, "Not Found", f"Room '{room_id}' tidak ditemukan.")
+            
+            game = self.games[room_id]
+            if len(game.players) >= 2:
+                return self.response(400, "Bad Request", "Room sudah penuh.")
+            
+            pid = game.add_player(player_name)
+            return self.response(200, "OK", f"Berhasil Bergabung\nplayer_id:{pid}")
 
-        # MEMAINKAN LANGKAH
+        if room_id not in self.games:
+            return self.response(404, "Not Found", "Room tidak ditemukan.")
+        
+        game = self.games[room_id]
+
+        if path_only == "/status":
+            return self.response(200, "OK", game.get_status())
+            
+        # Melakukan langkah
         if path_only == "/move":
-            gid = params.get("game_id")
-            pid = params.get("player")
+            pid = params.get("player_id")
             row = int(params.get("row", -1))
             col = int(params.get("col", -1))
             char = params.get("char", "").upper()
-            if gid in self.games:
-                # Cek apakah player pakai huruf yang sesuai
-                expected_char = self.player_letters.get(gid, {}).get(pid, "")
-                if char != expected_char:
-                    return self.response(400, "Bad Request", f"Kamu hanya bisa pakai huruf '{expected_char}'")
-                msg = self.games[gid].make_move(pid, row, col, char)
-                return self.response(200, "OK", msg)
-            return self.response(404, "Not Found", "Game not found")
+            msg = game.make_move(pid, row, col, char)
+            return self.response(200, "OK", msg)
+            
+        # Mereset game untuk main lagi
+        if path_only == "/reset_game":
+            game.reset()
+            return self.response(200, "OK", "Game direset.")
 
-        # LIHAT BOARD
-        if path_only == "/board":
-            gid = params.get("game_id")
-            if gid in self.games:
-                return self.response(200, "OK", self.games[gid].board_string())
-            return self.response(404, "Not Found", "Game not found")
-
-        # CEK STATUS PEMENANG
-        if path_only == "/status":
-            gid = params.get("game_id")
-            if gid in self.games:
-                winner = self.games[gid].winner
-                if winner:
-                    return self.response(200, "OK", f"Pemenang: {winner}")
-                return self.response(200, "OK", "Belum selesai")
-            return self.response(404, "Not Found", "Game not found")
-
-        # DEFAULT
-        return self.response(404, "Not Found", "Unknown route")
-
-
-# Untuk pengujian manual
-if __name__ == "__main__":
-    server = HttpServer()
-    print(server.proses("GET /join HTTP/1.0\r\n\r\n").decode())
+        return self.response(404, "Not Found", "Route tidak dikenal.")
