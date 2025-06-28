@@ -1,3 +1,4 @@
+#sos_game.py
 import uuid
 
 class SOSGame:

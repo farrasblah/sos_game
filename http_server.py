@@ -1,3 +1,4 @@
+#http_server.py
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 from sos_game import SOSGame 
@@ -107,7 +108,7 @@ Connection: close\r
             char = params.get("char", "").upper()
             msg = game.make_move(pid, row, col, char)
             if msg == "OK":
-                return self.response(200, "OK", game.get_status())
+                rreturn self.response(200, "OK", game.get_status())
             else:
                 return self.response(400, "Bad Request", msg)
 

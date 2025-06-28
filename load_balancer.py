@@ -33,7 +33,7 @@ def proxy(path):
 
     try:
         target_url = f"{server}/{path}?{query}"
-        resp = requests.get(target_url)
+        resp = requests.get(target_url, timeout=1.0)
         print(f"[LB] Forwarded to {target_url} -> status {resp.status_code}")
         return Response(resp.content, status=resp.status_code, content_type=resp.headers.get("Content-Type"))
     except Exception as e:

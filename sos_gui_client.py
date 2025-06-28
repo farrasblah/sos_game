@@ -4,6 +4,7 @@ import requests
 import time
 import threading
 import queue
+import copy
 
 pygame.init()
 BASE_URL = "http://localhost:8080"
@@ -21,6 +22,7 @@ C_GREEN = (34, 197, 94)
 C_RED = (239, 68, 68)
 C_ORANGE = (249, 115, 22)
 C_BG = (241, 245, 249)
+C_OPTIMISTIC = (150, 150, 150) 
 
 try:
     F_TITLE = pygame.font.Font(None, 70)
@@ -41,12 +43,23 @@ except Exception:
     F_SOS = pygame.font.SysFont("arial", 100, bold=True)
     F_GAMEOVER = pygame.font.SysFont("arial", 80, bold=True)
 
+class OptimisticMove:
+    def __init__(self, row, col, char, timestamp):
+        self.row = row
+        self.col = col
+        self.char = char
+        self.timestamp = timestamp
+        self.confirmed = False
+        self.failed = False
+
 class AppState:
     def __init__(self):
         self.game_state_queue = queue.Queue()
         self.move_queue = queue.Queue()
         self.network_thread = None
         self.network_thread_running = False
+        self.optimistic_moves = []
+        self.move_timeout = 5.0
         self.reset_to_home()
 
     def reset_to_home(self):
@@ -76,6 +89,63 @@ class AppState:
         self.last_fetch_time = 0
         self.winner_status = ""
         self.selected_grid_size = 3
+        self.optimistic_moves = []
+
+    def add_optimistic_move(self, row, col, char):
+        """Add an optimistic move that will be shown immediately"""
+        move = OptimisticMove(row, col, char, time.time())
+        self.optimistic_moves.append(move)
+        return move
+
+    def confirm_optimistic_move(self, row, col):
+        """Mark an optimistic move as confirmed by the server"""
+        for move in self.optimistic_moves:
+            if move.row == row and move.col == col and not move.confirmed:
+                move.confirmed = True
+                break
+
+    def fail_optimistic_move(self, row, col):
+        """Mark an optimistic move as failed"""
+        for move in self.optimistic_moves:
+            if move.row == row and move.col == col and not move.confirmed:
+                move.failed = True
+                break
+
+    def cleanup_optimistic_moves(self):
+        """Remove old or confirmed optimistic moves"""
+        current_time = time.time()
+        self.optimistic_moves = [
+            move for move in self.optimistic_moves 
+            if not move.confirmed and not move.failed and 
+            (current_time - move.timestamp) < self.move_timeout
+        ]
+
+    def get_display_board(self):
+        """Get the board state including optimistic moves"""
+        board_str = self.game_state.get('board', '.' * (self.selected_grid_size**2)).replace(',', '')
+        board_size = int(self.game_state.get('board_size', str(self.selected_grid_size)))
+        
+        if len(board_str) < board_size**2:
+            board_str = '.' * (board_size**2)
+        
+        # Convert to list for easier manipulation
+        board_list = list(board_str)
+        
+        # Apply optimistic moves that haven't been confirmed or failed
+        for move in self.optimistic_moves:
+            if not move.confirmed and not move.failed:
+                index = move.row * board_size + move.col
+                if index < len(board_list) and board_list[index] == '.':
+                    board_list[index] = move.char
+        
+        return ''.join(board_list), board_size
+
+    def is_optimistic_move(self, row, col):
+        """Check if a position has an unconfirmed optimistic move"""
+        for move in self.optimistic_moves:
+            if move.row == row and move.col == col and not move.confirmed and not move.failed:
+                return True
+        return False
 
 app = AppState()
 
@@ -108,14 +178,36 @@ def parse_status(text):
 def network_polling_thread(app_state_ref):
     while app_state_ref.network_thread_running:
         while not app_state_ref.move_queue.empty():
-            move_params = app_state_ref.move_queue.get()
+            move_data = app_state_ref.move_queue.get()
+            move_params = move_data['params']
+            optimistic_move = move_data['optimistic_move']
+            
             try:
-                r = requests.get(f"{BASE_URL}/move", params=move_params, timeout=5)
-                if r.status_code != 200:
-                    app_state_ref.game_state_queue.put({"type": "error", "message": f"Move failed: {r.text}"})
+                r = requests.get(f"{BASE_URL}/move", params=move_params, timeout=1)
+                if r.status_code == 200:
+                    # Move successful - confirm the optimistic move
+                    app_state_ref.confirm_optimistic_move(
+                        optimistic_move.row, optimistic_move.col
+                    )
+                else:
+                    # Move failed - mark optimistic move as failed
+                    app_state_ref.fail_optimistic_move(
+                        optimistic_move.row, optimistic_move.col
+                    )
+                    app_state_ref.game_state_queue.put({
+                        "type": "error", 
+                        "message": f"Move failed: {r.text}"
+                    })
                 app_state_ref.last_fetch_time = 0
             except requests.RequestException as e:
-                app_state_ref.game_state_queue.put({"type": "error", "message": f"Failed to send move: {e}"})
+                # Network error - mark optimistic move as failed
+                app_state_ref.fail_optimistic_move(
+                    optimistic_move.row, optimistic_move.col
+                )
+                app_state_ref.game_state_queue.put({
+                    "type": "error", 
+                    "message": f"Failed to send move: {e}"
+                })
 
         if app_state_ref.current_screen in ["waiting", "game_board"] and app_state_ref.room_id:
             if time.time() - app_state_ref.last_fetch_time >= 0.3:
@@ -129,6 +221,9 @@ def network_polling_thread(app_state_ref):
                         app_state_ref.game_state_queue.put({"type": "error", "message": r.text})
                 except requests.RequestException as e:
                     app_state_ref.game_state_queue.put({"type": "error", "message": "Server tidak merespon."})
+        
+        # Clean up old optimistic moves
+        app_state_ref.cleanup_optimistic_moves()
         
         time.sleep(0.05)
             
@@ -222,7 +317,8 @@ def draw_game_board():
     else:
         draw_text("Menunggu Lawan...", F_INFO, C_ORANGE, (WIDTH/2, 90))
 
-    current_board_size = int(app.game_state.get('board_size', '3')) 
+    # Get display board with optimistic moves
+    board_str, current_board_size = app.get_display_board()
 
     max_board_pixels = min(WIDTH - 50, HEIGHT - 250)
     cell_size = max_board_pixels // current_board_size
@@ -232,10 +328,6 @@ def draw_game_board():
     offset_y = 120
 
     board_rects = []
-    
-    board_str = app.game_state.get('board', '.' * (current_board_size**2)).replace(',', '')
-    if len(board_str) < current_board_size**2:
-        board_str = '.' * (current_board_size**2)
 
     scaled_sos_font_size = int(cell_size * 0.8)
     F_SCALED_SOS = pygame.font.Font(None, scaled_sos_font_size)
@@ -253,10 +345,22 @@ def draw_game_board():
             if letter_index < len(board_str):
                 letter = board_str[letter_index]
                 if letter != '.':
-                    color = C_BLUE if letter == 'S' else C_RED
+                    # Check if this is an optimistic move
+                    is_optimistic = app.is_optimistic_move(r, c)
+                    
+                    if is_optimistic:
+                        # Draw optimistic move with different styling
+                        color = C_OPTIMISTIC
+                        # Add a subtle border to indicate it's pending
+                        pygame.draw.rect(screen, C_ORANGE, rect, 1)
+                    else:
+                        # Regular confirmed move
+                        color = C_BLUE if letter == 'S' else C_RED
+                    
                     draw_text(letter, F_SCALED_SOS, color, rect.center)
         board_rects.append(row_rects)
 
+    # Draw SOS lines (only for confirmed moves)
     sos_lines = app.game_state.get('sos_lines', [])
     for start_pos, end_pos in sos_lines:
         r1, c1 = start_pos
@@ -285,6 +389,25 @@ def draw_game_over_screen():
     btn_play_again = pygame.Rect(WIDTH/2 - 150, HEIGHT/2, 300, 60)
     draw_button(btn_play_again, "MAIN LAGI", C_BLUE, C_WHITE)
     return {"play_again": btn_play_again}
+
+def is_valid_move(row, col):
+    """Check if a move is valid (cell is empty and no pending optimistic move)"""
+    board_str, board_size = app.get_display_board()
+    letter_index = row * board_size + col
+    
+    if letter_index >= len(board_str):
+        return False
+    
+    # Check if cell is empty in the actual board
+    actual_board = app.game_state.get('board', '.' * (board_size**2)).replace(',', '')
+    if letter_index < len(actual_board) and actual_board[letter_index] != '.':
+        return False
+    
+    # Check if there's already an optimistic move here
+    if app.is_optimistic_move(row, col):
+        return False
+    
+    return True
 
 while True:
     screen.fill(C_BG)
@@ -349,14 +472,34 @@ while True:
             if event.type == pygame.MOUSEBUTTONDOWN:
                 ui = draw_game_board()
                 if app.game_state.get('turn_id') == app.player_id:
-                    if ui['s_btn'].collidepoint(mouse_pos): app.selected_char = 'S'
-                    elif ui['o_btn'].collidepoint(mouse_pos): app.selected_char = 'O'
+                    if ui['s_btn'].collidepoint(mouse_pos): 
+                        app.selected_char = 'S'
+                    elif ui['o_btn'].collidepoint(mouse_pos): 
+                        app.selected_char = 'O'
                     else:
                         for r, row_rects in enumerate(ui['board']):
                             for c, rect in enumerate(row_rects):
                                 if rect.collidepoint(mouse_pos):
-                                    params = {"room_id": app.room_id, "player_id": app.player_id, "row": r, "col": c, "char": app.selected_char}
-                                    app.move_queue.put(params)
+                                    # Check if move is valid before making optimistic move
+                                    if is_valid_move(r, c):
+                                        # Create optimistic move first
+                                        optimistic_move = app.add_optimistic_move(r, c, app.selected_char)
+                                        
+                                        # Queue the move for network submission
+                                        params = {
+                                            "room_id": app.room_id, 
+                                            "player_id": app.player_id, 
+                                            "row": r, 
+                                            "col": c, 
+                                            "char": app.selected_char
+                                        }
+                                        
+                                        move_data = {
+                                            'params': params,
+                                            'optimistic_move': optimistic_move
+                                        }
+                                        
+                                        app.move_queue.put(move_data)
                                     break
                             else:
                                 continue
@@ -372,7 +515,21 @@ while True:
     while not app.game_state_queue.empty():
         update = app.game_state_queue.get()
         if update["type"] == "state_update":
+            # Before updating game state, check for confirmed moves
+            old_board = app.game_state.get('board', '')
             app.game_state = update["data"]
+            new_board = app.game_state.get('board', '')
+            
+            # If board changed, some optimistic moves might be confirmed
+            if old_board != new_board and new_board:
+                board_size = int(app.game_state.get('board_size', str(app.selected_grid_size)))
+                new_board_clean = new_board.replace(',', '')
+                
+                for move in app.optimistic_moves[:]:
+                    index = move.row * board_size + move.col
+                    if index < len(new_board_clean) and new_board_clean[index] == move.char:
+                        move.confirmed = True
+            
             if app.game_state.get('player_count') == '2' and app.current_screen == 'waiting':
                 app.current_screen = 'game_board'
             if app.game_state.get('winner') and app.current_screen == 'game_board':
