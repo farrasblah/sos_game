@@ -1,10 +1,11 @@
-# sos_game.py
 import uuid
 
 class SOSGame:
     def __init__(self, board_size=3):
         """Inisialisasi state game."""
-        self.board_size = board_size
+        if board_size not in [3, 5, 9]:
+            raise ValueError("Board size must be 3, 5, or 9.")
+        self.board_size = board_size 
         self.players = []  
         self.reset()
 
@@ -15,11 +16,13 @@ class SOSGame:
         self.turn = 0
         self.winner = None
         self.game_over_reason = ""
-        self.sos_lines = [] # MENYIMPAN KOORDINAT GARIS SOS
+        self.sos_lines = []
 
     def add_player(self, player_name):
         """Menambahkan pemain baru dengan nama."""
         if len(self.players) >= 2:
+            return None
+        if any(p['name'] == player_name for p in self.players):
             return None
         player_id = str(uuid.uuid4())
         player_data = {'id': player_id, 'name': player_name}
@@ -45,7 +48,9 @@ class SOSGame:
             return "Menunggu pemain lain untuk bergabung."
         if player_id != self.current_player_id():
             return "Bukan giliranmu!"
-        if not (0 <= row < self.board_size and 0 <= col < self.board_size and self.board[row][col] == '' and char in ['S', 'O']):
+        
+        if not (0 <= row < self.board_size and 0 <= col < self.board_size and 
+                self.board[row][col] == '' and char in ['S', 'O']):
             return "Langkah tidak valid."
 
         self.board[row][col] = char
@@ -53,7 +58,9 @@ class SOSGame:
         
         if new_sos_lines:
             self.scores[player_id] += len(new_sos_lines)
-            self.sos_lines.extend(new_sos_lines)
+            for line in new_sos_lines:
+                if line not in self.sos_lines:
+                    self.sos_lines.append(line)
         else:
             self.turn += 1
 
@@ -74,7 +81,6 @@ class SOSGame:
         """
         Mengecek terbentuknya pola S-O-S di sekitar sel (r, c).
         Mengembalikan daftar berisi koordinat garis dari S ke S.
-        Contoh: [((start_row, start_col), (end_row, end_col))]
         """
         lines = []
         char = self.board[r][c]
@@ -82,12 +88,16 @@ class SOSGame:
         if char == 'O':
             for dr, dc in [(0, 1), (1, 0), (1, 1), (1, -1)]:
                 if self.get_char(r - dr, c - dc) == 'S' and self.get_char(r + dr, c + dc) == 'S':
-                    lines.append( ((r - dr, c - dc), (r + dr, c + dc)) )
+                    p1 = (r - dr, c - dc)
+                    p2 = (r + dr, c + dc)
+                    lines.append(tuple(sorted((p1, p2))))
 
         elif char == 'S':
             for dr, dc in [(0, 1), (1, 0), (1, 1), (1, -1), (0, -1), (-1, 0), (-1, -1), (-1, 1)]:
                  if self.get_char(r + dr, c + dc) == 'O' and self.get_char(r + 2*dr, c + 2*dc) == 'S':
-                     lines.append( ((r, c), (r + 2*dr, c + 2*dc)) )
+                     p1 = (r, c)
+                     p2 = (r + 2*dr, c + 2*dc)
+                     lines.append(tuple(sorted((p1, p2))))
         return lines
 
     def get_char(self, r, c):
@@ -100,6 +110,7 @@ class SOSGame:
         """Mengembalikan status lengkap game dalam format string."""
         status_lines = []
         status_lines.append(f"player_count:{len(self.players)}")
+        status_lines.append(f"board_size:{self.board_size}")
         
         p1_id = self.players[0]['id'] if len(self.players) > 0 else "null"
         p1_name = self.players[0]['name'] if len(self.players) > 0 else "N/A"

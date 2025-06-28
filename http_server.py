@@ -1,7 +1,6 @@
-# http_server.py
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
-from sos_game import SOSGame
+from sos_game import SOSGame 
 
 class HttpServer:
     def __init__(self):
@@ -31,8 +30,7 @@ Connection: close\r
         try:
             baris_pertama = data.split("\r\n")[0]
             method, path, _ = baris_pertama.split(" ")
-            print("[SERVER] Menerima request:")
-            print(baris_pertama)
+            print(f"[SERVER] Menerima request: {baris_pertama}")
         except ValueError:
             return self.response(400, "Bad Request", "Invalid HTTP request")
         
@@ -42,24 +40,36 @@ Connection: close\r
 
     def route(self, path):
         """Mengarahkan request ke fungsi yang sesuai."""
-        print(f"[SERVER] Menangani request: {path}")
         path_only, params = self.parse_path(path)
         room_id = params.get("room_id")
         player_name = params.get("player_name")
-
-        # Membuat room baru
+        
         if path_only == "/create_room":
+            try:
+                board_size = int(params.get("board_size", 3))
+                if board_size not in [3, 5, 9]:
+                    board_size = 3
+            except ValueError:
+                board_size = 3
+
             if not room_id or not player_name:
                 return self.response(400, "Bad Request", "Room ID dan Nama Player harus diisi.")
             if room_id in self.games:
                 return self.response(400, "Bad Request", f"Room '{room_id}' sudah ada.")
             
-            game = SOSGame(board_size=3)
+            try:
+                game = SOSGame(board_size=board_size)
+            except ValueError as e:
+                return self.response(400, "Bad Request", str(e))
+                
             pid = game.add_player(player_name)
-            self.games[room_id] = game
-            return self.response(200, "OK", f"Room Dibuat\nplayer_id:{pid}")
+            if pid is None:
+                return self.response(400, "Bad Request", "Gagal menambahkan pemain ke room baru.")
 
-        # Bergabung ke room yang ada
+            self.games[room_id] = game
+            return self.response(200, "OK", f"success:true\nplayer_id:{pid}\nmessage:Room Dibuat")
+
+        # Joining an existing room
         if path_only == "/join_room":
             if not room_id or not player_name:
                 return self.response(400, "Bad Request", "Room ID dan Nama Player harus diisi.")
@@ -72,10 +82,11 @@ Connection: close\r
 
             pid = game.add_player(player_name)
             if pid is None:
-                return self.response(400, "Bad Request", "Nama pemain sudah digunakan.")
+                return self.response(400, "Bad Request", "Nama pemain sudah digunakan atau room penuh.")
 
-            return self.response(200, "OK", f"Berhasil Bergabung\nplayer_id:{pid}")
+            return self.response(200, "OK", f"success:true\nplayer_id:{pid}\nmessage:Berhasil Bergabung")
 
+        # All subsequent routes require an existing room_id
         if room_id not in self.games:
             return self.response(404, "Not Found", "Room tidak ditemukan.")
         
@@ -87,12 +98,19 @@ Connection: close\r
         # Melakukan langkah
         if path_only == "/move":
             pid = params.get("player_id")
-            row = int(params.get("row", -1))
-            col = int(params.get("col", -1))
+            try:
+                row = int(params.get("row", -1))
+                col = int(params.get("col", -1))
+            except ValueError:
+                return self.response(400, "Bad Request", "Koordinat baris/kolom tidak valid.")
+
             char = params.get("char", "").upper()
             msg = game.make_move(pid, row, col, char)
-            return self.response(200, "OK", msg)
-            
+            if msg == "OK":
+                return self.response(200, "OK", game.get_status())
+            else:
+                return self.response(400, "Bad Request", msg)
+
         # Mereset game untuk main lagi
         if path_only == "/reset_game":
             game.reset()
