@@ -50,7 +50,7 @@ class SOSGame:
         if player_id != self.current_player_id():
             return "Bukan giliranmu!"
         
-        if not (0 <= row < self.board_size and 0 <= col < self.board_size and 
+        if not(0 <= row < self.board_size and 0 <= col < self.board_size and 
                 self.board[row][col] == '' and char in ['S', 'O']):
             return "Langkah tidak valid."
 

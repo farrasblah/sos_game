@@ -1,3 +1,4 @@
+#sos_gui_client.py
 import pygame
 import sys
 import requests
@@ -210,7 +211,7 @@ def network_polling_thread(app_state_ref):
                 })
 
         if app_state_ref.current_screen in ["waiting", "game_board"] and app_state_ref.room_id:
-            if time.time() - app_state_ref.last_fetch_time >= 0.3:
+            if time.time() - app_state_ref.last_fetch_time >= 0.1:
                 try:
                     app_state_ref.last_fetch_time = time.time()
                     r = requests.get(f"{BASE_URL}/status?room_id={app_state_ref.room_id}", timeout=3)
@@ -225,7 +226,7 @@ def network_polling_thread(app_state_ref):
         # Clean up old optimistic moves
         app_state_ref.cleanup_optimistic_moves()
         
-        time.sleep(0.05)
+        time.sleep(0.01)
             
 def api_call(endpoint, params):
     try:
@@ -276,25 +277,50 @@ def draw_input_form():
     draw_text("Nama Anda", F_INFO, C_GRAY, (WIDTH/2-150, 300))
     draw_text(app.form_input_name, F_INPUT, C_BLACK, (input_name_rect.centerx, input_name_rect.centery))
 
-    draw_text("Ukuran Papan:", F_INFO, C_BLACK, (WIDTH/2, 400))
-    btn_3x3 = pygame.Rect(WIDTH/2 - 120, 430, 80, 40)
-    btn_5x5 = pygame.Rect(WIDTH/2 - 30, 430, 80, 40)
-    btn_9x9 = pygame.Rect(WIDTH/2 + 60, 430, 80, 40)
+    # Only show board size selection when creating a room
+    buttons_dict = {"room": input_room_rect, "name": input_name_rect}
+    
+    if app.form_type == 'create':
+        draw_text("Ukuran Papan:", F_INFO, C_BLACK, (WIDTH/2, 400))
+        btn_3x3 = pygame.Rect(WIDTH/2 - 120, 430, 80, 40)
+        btn_5x5 = pygame.Rect(WIDTH/2 - 30, 430, 80, 40)
+        btn_9x9 = pygame.Rect(WIDTH/2 + 60, 430, 80, 40)
 
-    draw_button(btn_3x3, "3x3", C_BLUE if app.selected_grid_size == 3 else C_GRAY, C_WHITE)
-    draw_button(btn_5x5, "5x5", C_BLUE if app.selected_grid_size == 5 else C_GRAY, C_WHITE)
-    draw_button(btn_9x9, "9x9", C_BLUE if app.selected_grid_size == 9 else C_GRAY, C_WHITE)
+        draw_button(btn_3x3, "3x3", C_BLUE if app.selected_grid_size == 3 else C_GRAY, C_WHITE)
+        draw_button(btn_5x5, "5x5", C_BLUE if app.selected_grid_size == 5 else C_GRAY, C_WHITE)
+        draw_button(btn_9x9, "9x9", C_BLUE if app.selected_grid_size == 9 else C_GRAY, C_WHITE)
 
-    btn_ok = pygame.Rect(WIDTH/2 - 160, 500, 150, 50)
-    btn_cancel = pygame.Rect(WIDTH/2 + 10, 500, 150, 50)
-    draw_button(btn_ok, "OK", C_GREEN, C_WHITE)
-    draw_button(btn_cancel, "BATAL", C_RED, C_WHITE)
+        btn_ok = pygame.Rect(WIDTH/2 - 160, 500, 150, 50)
+        btn_cancel = pygame.Rect(WIDTH/2 + 10, 500, 150, 50)
+        
+        buttons_dict.update({
+            "3x3_btn": btn_3x3, 
+            "5x5_btn": btn_5x5, 
+            "9x9_btn": btn_9x9,
+            "ok": btn_ok,
+            "cancel": btn_cancel
+        })
+        
+        error_y = 580
+    else:
+        # For join room, place buttons higher since no board size selection
+        btn_ok = pygame.Rect(WIDTH/2 - 160, 420, 150, 50)
+        btn_cancel = pygame.Rect(WIDTH/2 + 10, 420, 150, 50)
+        
+        buttons_dict.update({
+            "ok": btn_ok,
+            "cancel": btn_cancel
+        })
+        
+        error_y = 500
+
+    draw_button(buttons_dict["ok"], "OK", C_GREEN, C_WHITE)
+    draw_button(buttons_dict["cancel"], "BATAL", C_RED, C_WHITE)
     
     if app.error_message:
-        draw_text(app.error_message, F_INFO, C_RED, (WIDTH/2, 580))
+        draw_text(app.error_message, F_INFO, C_RED, (WIDTH/2, error_y))
 
-    return {"room": input_room_rect, "name": input_name_rect, "ok": btn_ok, "cancel": btn_cancel,
-            "3x3_btn": btn_3x3, "5x5_btn": btn_5x5, "9x9_btn": btn_9x9}
+    return buttons_dict
 
 def draw_waiting_screen():
     draw_text("Menunggu Lawan...", F_TITLE, C_ORANGE, (WIDTH/2, HEIGHT/3))
@@ -436,9 +462,9 @@ while True:
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if ui["room"].collidepoint(mouse_pos): app.active_input = "room"
                 elif ui["name"].collidepoint(mouse_pos): app.active_input = "name"
-                elif ui["3x3_btn"].collidepoint(mouse_pos): app.selected_grid_size = 3
-                elif ui["5x5_btn"].collidepoint(mouse_pos): app.selected_grid_size = 5
-                elif ui["9x9_btn"].collidepoint(mouse_pos): app.selected_grid_size = 9
+                elif ui.get("3x3_btn") and ui["3x3_btn"].collidepoint(mouse_pos): app.selected_grid_size = 3
+                elif ui.get("5x5_btn") and ui["5x5_btn"].collidepoint(mouse_pos): app.selected_grid_size = 5
+                elif ui.get("9x9_btn") and ui["9x9_btn"].collidepoint(mouse_pos): app.selected_grid_size = 9
                 elif ui["cancel"].collidepoint(mouse_pos): app.reset_to_home()
                 elif ui["ok"].collidepoint(mouse_pos):
                     app.room_id = app.form_input_room.strip()
@@ -447,7 +473,10 @@ while True:
                         app.error_message = "ID Room dan Nama tidak boleh kosong."
                     else:
                         endpoint = "create_room" if app.form_type == "create" else "join_room"
-                        params = {"room_id": app.room_id, "player_name": app.player_name, "board_size": app.selected_grid_size}
+                        params = {"room_id": app.room_id, "player_name": app.player_name}
+                        # Only add board_size parameter when creating a room
+                        if app.form_type == "create":
+                            params["board_size"] = app.selected_grid_size
                         success, text = api_call(endpoint, params)
                         if success:
                             response_data = parse_status(text)

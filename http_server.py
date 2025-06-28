@@ -108,7 +108,7 @@ Connection: close\r
             char = params.get("char", "").upper()
             msg = game.make_move(pid, row, col, char)
             if msg == "OK":
-                rreturn self.response(200, "OK", game.get_status())
+                return self.response(200, "OK", game.get_status())
             else:
                 return self.response(400, "Bad Request", msg)
 
